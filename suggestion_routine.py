@@ -91,21 +91,22 @@ class RecommendationProcessor:
             return {"error": "Failed to parse JSON"}
 
 class UserInput(BaseModel):
-    primary_self_care_goal: str
-    dream_to_achieve: str
-    difficulty_in_achieving_dreams: str
-    satisfying_part_of_day: str
-    measures_to_achieve_goals: str
-    hours_of_sleep: str
-    health_concerns: Optional[str]
-    medications: Optional[str]
-    habits_disturbing_sleep: str
-    frequency_of_stress: str
-    self_love: str
-    likes_about_self: str
-    improvements_in_self: str
-    fun_with_everyone: str
-    easy_goals: str
+    primary_self_care_goal: Optional[str] = None
+    dream_to_achieve: Optional[str] = None
+    difficulty_in_achieving_dreams: Optional[str] = None
+    satisfying_part_of_day: Optional[str] = None
+    measures_to_achieve_goals: Optional[str] = None
+    hours_of_sleep: Optional[str] = None
+    health_concerns: Optional[str] = None
+    medications: Optional[str] = None
+    habits_disturbing_sleep: Optional[str] = None
+    frequency_of_stress: Optional[str] = None
+    self_love: Optional[str] = None
+    likes_about_self: Optional[str] = None
+    improvements_in_self: Optional[str] = None
+    fun_with_everyone: Optional[str] = None
+    easy_goals: Optional[str] = None
+
 
 @app.post("/recommendations/")
 async def get_recommendations(user_input: UserInput,
