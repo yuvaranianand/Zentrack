@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 import json
 import re
+import csv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain, StuffDocumentsChain
@@ -10,7 +11,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import os
-
 
 app = FastAPI()
 load_dotenv()
@@ -22,17 +22,20 @@ class RecommendationProcessor:
         self.prompt_template = """ User data: {input_documents}
 
         Based on the user's data, provide personalized recommendations for self-care and lifestyle improvements. 
-        Use the primary_self_care_goal as the main focus for these suggestions. Please provide recommendations 
-        in the following JSON format:
-
+        Each recommendation should include:
         - **routineName**: Provide a brief, one or two-word title for the recommendation.
         - **description**: Give a one-line description of the recommendation tailored to the user's self-care goal.
         - **quotes**: Include a short, motivational quote related to the recommendation.
+        - **category**: Determine a category for the routine from the following options: 
+          ['wake up', 'song time', 'workout', 'yoga and meditation', 'positive affirmations', 'breakfast', 
+          'drink water', 'getting ready for office', 'cooking', 'upskilling', 'reading time', 'lunch', 
+          'household work', 'making bed', 'dinner', 'prepare for next day', 'thanksgiving before bed', 
+          'planned schedules', 'a date', 'movie night', 'self care', 'family time', 'medication', 'nan', 
+          'morning study', 'getting ready', 'fresh up and snack', 'study time', 'playtime', 'special classes'].
         - **isAdd**: Set to true to indicate that this recommendation should be added.
 
-        Ensure the recommendations are aligned with the user's self-care goal and presented clearly.
-        Try to give at least 15 routines to follow based on the user data.
-        Give the proper response in json format.
+        Provide the response in JSON format including the category and an image URL corresponding to the category. 
+        Give at least 10 to 15 recommendations
         """
         self.prompt = PromptTemplate(template=self.prompt_template, input_variables=["input_documents"])
         self.llm_chain = LLMChain(llm=self.llm, prompt=self.prompt)
@@ -40,29 +43,52 @@ class RecommendationProcessor:
             llm_chain=self.llm_chain,
             document_variable_name="input_documents",
         )
+        self.category_image_urls = self.load_category_image_urls("routine.csv")
+
+    def load_category_image_urls(self, csv_file_path: str) -> Dict[str, str]:
+        category_image_urls = {}
+        try:
+            with open(csv_file_path, mode='r') as file:
+                reader = csv.DictReader(file)
+                for row in reader:
+                    category = row['NAME'].strip().lower()  # Normalize category names
+                    image_url = row['IMAGE URL'].strip()
+                    category_image_urls[category] = image_url
+        except Exception as e:
+            print(f"Error loading CSV file: {e}")
+        return category_image_urls
 
     def get_recommendations(self, user_data: Dict[str, Any]) -> Dict[str, Any]:
         documents = [Document(page_content=json.dumps(user_data))]
-        recommendations = self.chain.invoke(
-            {"input_documents": documents}
-        )
+        recommendations = self.chain.invoke({"input_documents": documents})
         response_text = recommendations["output_text"]
-        return self.extract_json(response_text)
+        routines = self.extract_json(response_text)
+
+        if isinstance(routines, list):
+            for routine in routines:
+                category = routine.get("category", "").strip().lower()  # Normalize category names
+                routine["imageUrl"] = self.category_image_urls.get(category, None)
+            # Exclude category field from the final output
+            for routine in routines:
+                if "category" in routine:
+                    del routine["category"]
+        else:
+            return {"error": "Unexpected response format"}
+
+        return routines
 
     @staticmethod
-    def extract_json(response_text: str) -> Dict[str, Any]:
-        json_match = re.search(r'\[.*?\]', response_text, re.DOTALL)
-        if json_match:
-            json_str = json_match.group(0)
-            try:
-                return json.loads(json_str)
-            except json.JSONDecodeError:
-                return {"error": "Failed to parse JSON"}
-        else:
-            return {"error": "No JSON found in the response"}
-
-
-
+    def extract_json(response_text: str) -> Any:
+        try:
+            if response_text.startswith("[") and response_text.endswith("]"):
+                return json.loads(response_text)
+            else:
+                json_match = re.search(r'\[.*?\]', response_text, re.DOTALL)
+                if json_match:
+                    return json.loads(json_match.group(0))
+                return {"error": "No JSON found in the response"}
+        except json.JSONDecodeError:
+            return {"error": "Failed to parse JSON"}
 
 class UserInput(BaseModel):
     primary_self_care_goal: str
@@ -80,10 +106,6 @@ class UserInput(BaseModel):
     improvements_in_self: str
     fun_with_everyone: str
     easy_goals: str
-
-def preprocess_user_data(user_input: UserInput) -> Dict[str, Any]:
-    processor = RecommendationProcessor()
-    return processor.get_recommendations(user_input.dict())
 
 @app.post("/recommendations/")
 async def get_recommendations(user_input: UserInput,
