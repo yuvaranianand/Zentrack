@@ -1,5 +1,6 @@
 from dotenv import load_dotenv
 import json
+import csv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain, StuffDocumentsChain
@@ -15,6 +16,7 @@ app = FastAPI()
 load_dotenv()
 os.environ['GOOGLE_API_KEY'] = os.getenv('GOOGLE_API_KEY')
 
+
 class RecommendationProcessor:
     def __init__(self, model_name: str = "gemini-1.5-flash"):
         self.llm = ChatGoogleGenerativeAI(model=model_name)
@@ -24,11 +26,15 @@ class RecommendationProcessor:
         - **routineName**: The name of the routine.
         - **description**: A detailed description of the recommendation.
         - **quote**: A motivational quote related to the routine.
-        - **articleUrl**: A URL link to a relevant article or resource related to the routine. Give proper related link
-        should extract from this.
 
-        Please ensure the recommendation is aligned with the routine name and is presented clearly.
-        Provide the response in JSON format.
+        Also, determine the category for the routine from the following options:
+        ['wake up', 'song time', 'workout', 'yoga and meditation', 'positive affirmations', 'breakfast', 
+        'drink water', 'getting ready for office', 'cooking', 'upskilling', 'reading time', 'lunch', 
+        'household work', 'making bed', 'dinner', 'prepare for next day', 'thanksgiving before bed', 
+        'planned schedules', 'a date', 'movie night', 'self care', 'family time', 'medication', 'nan', 
+        'morning study', 'getting ready', 'fresh up and snack', 'study time', 'playtime', 'special classes'].
+
+        Provide the response in JSON format including the image URL corresponding to the category.
         """
         self.prompt = PromptTemplate(template=self.prompt_template, input_variables=["input_documents"])
         self.llm_chain = LLMChain(llm=self.llm, prompt=self.prompt)
@@ -36,27 +42,52 @@ class RecommendationProcessor:
             llm_chain=self.llm_chain,
             document_variable_name="input_documents",
         )
+        self.category_image_urls = self.load_category_image_urls("routine.csv")
+
+    def load_category_image_urls(self, csv_file_path: str) -> Dict[str, str]:
+        category_image_urls = {}
+        try:
+            with open(csv_file_path, mode='r') as file:
+                reader = csv.DictReader(file)
+                for row in reader:
+                    category = row['NAME'].strip().lower()  # Normalize category names
+                    image_url = row['IMAGE URL'].strip()
+                    category_image_urls[category] = image_url
+        except Exception as e:
+            print(f"Error loading CSV file: {e}")
+        return category_image_urls
 
     def get_recommendations(self, routine_data: Dict[str, Any]) -> Dict[str, Any]:
         documents = [Document(page_content=json.dumps(routine_data))]
         recommendations = self.chain.invoke({"input_documents": documents})
         response_text = recommendations.get("output_text", "")
-        #print(f"Full recommendations response: {recommendations}")  # Debugging line
-        #print(f"Raw response text: {response_text}")  # Debugging line
-        return self.extract_json(response_text)
+        structured_response = self.extract_json(response_text)
+
+        
+        routine_name = routine_data.get("routineName", "").strip()
+        category = structured_response.get("category", "").strip().lower() 
+
+        if category in self.category_image_urls:
+            image_url = self.category_image_urls[category]
+            structured_response["imageUrl"] = image_url
+        else:
+            structured_response["imageUrl"] = None
+
+        
+        structured_response.pop("category", None)
+
+        return structured_response
 
     @staticmethod
     def extract_json(response_text: str) -> Dict[str, Any]:
-        #print(f"Raw response text: {response_text}")  # Debugging line
         try:
-            # Strip any extraneous characters or text
+            
             response_text = response_text.strip()
             if response_text.startswith("{") and response_text.endswith("}"):
-                # Directly try to parse JSON
+                
                 return json.loads(response_text)
             else:
-                # Handle cases where the response might be wrapped in extra text
-                # This is a fallback; adjust if you can identify specific patterns
+              
                 json_str = re.search(r'\{.*?\}', response_text, re.DOTALL)
                 if json_str:
                     return json.loads(json_str.group(0))
@@ -68,6 +99,7 @@ class RecommendationProcessor:
 class RoutineInput(BaseModel):
     routineName: str
 
+
 @app.post("/template/")
 async def get_recommendations(routine_input: RoutineInput,
                               processor: RecommendationProcessor = Depends(lambda: RecommendationProcessor())):
@@ -75,6 +107,8 @@ async def get_recommendations(routine_input: RoutineInput,
     structured_response = processor.get_recommendations(routine_data)
     return JSONResponse(content={"message": "Information Extracted successfully", "response": structured_response})
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8001)
